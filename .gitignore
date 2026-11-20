@@ -1,0 +1,5 @@
+.streamlit/secrets.toml
+data/artmentor_history.json
+data/uploads/
+__pycache__/
+*.pyc
