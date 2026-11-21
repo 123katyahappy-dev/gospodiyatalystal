@@ -10,9 +10,9 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL_NAME = "qwen3.5:4b"
 
 MODE_LABELS = {
-    "realism": "Realism (Re)",
-    "character": "Character (Ch)",
-    "composition": "Composition (Co)",
+    "Realism": "Realism (Re)",
+    "Character": "Character (Ch)",
+    "Composition": "Composition (Co)",
 }
 
 MODE_PROMPTS = {
