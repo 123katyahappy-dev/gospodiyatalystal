@@ -157,55 +157,103 @@ if st.session_state.page == "home":
         unsafe_allow_html=True,
     )
 
+
 elif st.session_state.page == "workspace":
     mode = st.session_state.selected_mode
+
     if mode not in MODES:
         st.warning("Сначала выбери направление.")
         if st.button("На главную"):
             open_home()
             st.rerun()
+
     else:
         st.subheader(f"{MODES[mode]['icon']} {MODE_LABELS[mode]}")
         st.caption(MODES[mode]["description"])
-        uploaded = st.file_uploader(
-            "Загрузи свой рисунок",
-            type=["png", "jpg", "jpeg", "webp"],
-            key="artwork_upload",
-            help="Для тестирования лучше использовать изображение до 10 МБ.",
-        )
-        goal = st.text_area(
-            "Что особенно хочешь проверить? (необязательно)",
-            placeholder="Например: хочу проверить анатомию рук или освещение...",
-            height=85,
-        )
-        if uploaded:
-            image_bytes = uploaded.getvalue()
-            st.image(image_bytes, caption=uploaded.name, use_container_width=True)
-            if len(image_bytes) > 10 * 1024 * 1024:
-                st.error("Файл больше 10 МБ. Пожалуйста, выбери изображение поменьше.")
-            elif st.button("✨ Проанализировать рисунок", type="primary", use_container_width=True):
+
+        left, right = st.columns([1, 1], gap="large")
+
+        with left:
+            st.markdown("### Твой рисунок")
+
+            uploaded = st.file_uploader(
+                "Загрузи изображение",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="artwork_upload",
+                help="Для тестирования лучше использовать изображение до 10 МБ.",
+            )
+
+            image_bytes = None
+
+            if uploaded:
+                image_bytes = uploaded.getvalue()
+
+                if len(image_bytes) > 10 * 1024 * 1024:
+                    st.error("Файл больше 10 МБ. Пожалуйста, выбери изображение поменьше.")
+                    image_bytes = None
+                else:
+                    st.image(
+                        image_bytes,
+                        caption=uploaded.name,
+                        use_container_width=True,
+                    )
+            else:
+                st.info("Загрузи рисунок, чтобы увидеть его здесь.")
+
+        with right:
+            st.markdown("### Настройки анализа")
+
+            goal = st.text_area(
+                "Что особенно хочешь проверить?",
+                placeholder="Например: хочу проверить анатомию рук или освещение...",
+                height=150,
+            )
+
+            st.caption("Комментарий необязателен. Можешь оставить поле пустым.")
+
+            if st.button(
+                "✨ Проанализировать рисунок",
+                type="primary",
+                use_container_width=True,
+                disabled=image_bytes is None,
+            ):
                 try:
                     with st.spinner("ArtMentor изучает рисунок..."):
-                        analysis = analyze_art(image_bytes, uploaded.type, mode, goal)
-                        image_path = save_uploaded_image(image_bytes, uploaded.name)
+                        analysis = analyze_art(
+                            image_bytes,
+                            uploaded.type,
+                            mode,
+                            goal,
+                        )
+
+                        image_path = save_uploaded_image(
+                            image_bytes,
+                            uploaded.name,
+                        )
+
                         record = save_analysis({
                             "mode": mode,
-                            "mode_code": {"Realism": "Re", "Character": "Ch", "Composition": "Co"}[mode],
+                            "mode_code": {
+                                "Realism": "Re",
+                                "Character": "Ch",
+                                "Composition": "Co",
+                            }[mode],
                             "original_filename": uploaded.name,
                             "image_path": image_path,
                             "analysis": analysis,
                             "goal": goal,
                             "conversation": [],
                         })
+
                     st.session_state.current_record_id = record["id"]
                     st.session_state.page = "result"
                     st.rerun()
+
                 except Exception as error:
                     st.error(f"Не удалось выполнить анализ: {error}")
-        else:
-            st.info("Сначала загрузи изображение, чтобы запустить анализ.")
 
 elif st.session_state.page == "result":
+
     record = get_record(st.session_state.current_record_id) if st.session_state.current_record_id else None
     if not record:
         st.warning("Результат не найден. Возможно, история ещё не создана.")
