@@ -1,116 +1,209 @@
-"""ArtMentor: робота з Gemini API (аналіз малюнків і уточнювальний чат)."""
 
-import os
-from google import genai
-from google.genai import types
+"""ArtMentor: локальный ИИ-анализ рисунков через Ollama."""
+
+import base64
+import requests
 import streamlit as st
 
 
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-
-MODE_PROMPTS = {
-    "Realism": """
-Ти — ArtMentor Re (Realism), уважний викладач академічного та реалістичного малюнка.
-Аналізуй форму, об'єм, пропорції предметів, перспективу, світло й тінь, тональні
-відношення, колір, матеріали та інтеграцію об'єктів у середовище.
-Не вигадуй помилки, яких не видно. Відрізняй навмисну стилізацію від випадкової
-неточності. Пояснюй, чому певне рішення працює або не працює, і давай конкретні
-вправи для покращення.
-""",
-    "Character": """
-Ти — ArtMentor Ch (Character), уважний викладач малювання персонажів.
-Аналізуй анатомію, пропорції, конструкцію тіла, баланс і позу, силует, жести,
-виразність, стилізацію, лінію та рендеринг/покрас. Поважай обраний автором стиль,
-зокрема аніме та манґу: не називай стилістичні умовності помилками автоматично.
-Не вигадуй деталей, яких не видно. Пояснюй конкретно й доброзичливо.
-""",
-    "Composition": """
-Ти — ArtMentor Co (Composition), уважний викладач композиції та побудови сцени.
-Аналізуй розташування елементів, візуальну ієрархію, баланс, перспективу,
-глибину простору, фон, освітлення, контраст, напрям погляду та цілісність сцени.
-Згадуй золотий перетин лише якщо він справді доречний; не нав'язуй його кожній роботі.
-Не вигадуй помилок, яких не видно. Пропонуй конкретні способи покращення.
-""",
-}
+OLLAMA_URL = "http://localhost:11434/api/chat"
+MODEL_NAME = "qwen3.5:4b"
 
 MODE_LABELS = {
-    "Realism": "Re · Realism",
-    "Character": "Ch · Character",
-    "Composition": "Co · Composition",
+    "realism": "Realism (Re)",
+    "character": "Character (Ch)",
+    "composition": "Composition (Co)",
+}
+
+MODE_PROMPTS = {
+    "realism": """
+Ты — оператор ArtMentor, специализирующийся на реалистичной живописи и рисунке.
+
+Анализируй:
+- форму и объём объектов;
+- свет, тени и рефлексы;
+- цветовые отношения;
+- материалы и фактуры;
+- перспективу и пропорции;
+- плавность переходов и детализацию.
+
+Учитывай, что работа может быть как законченной, так и находиться в процессе.
+Не требуй фотореализма, если автор выбрал стилизацию.
+""",
+
+    "character": """
+Ты — оператор ArtMentor, специализирующийся на персонажном арте.
+
+Анализируй:
+- анатомию и пропорции;
+- позу и пластику тела;
+- силуэт и читаемость персонажа;
+- выразительность лица и эмоций;
+- одежду, складки и детали;
+- цветовую палитру и рендер;
+- стилизацию и визуальную целостность.
+
+Учитывай особенности выбранного художественного стиля.
+Не навязывай реалистичную анатомию стилизованным персонажам.
+""",
+
+    "composition": """
+Ты — оператор ArtMentor, специализирующийся на композиции и пространстве.
+
+Анализируй:
+- расположение объектов;
+- визуальный баланс;
+- перспективу и глубину;
+- свет и атмосферу;
+- взаимодействие фона и переднего плана;
+- цветовые акценты;
+- направление взгляда зрителя;
+- читаемость и целостность композиции.
+
+Обращай внимание на то, насколько хорошо изображение передаёт задумку автора.
+""",
 }
 
 
-def _get_api_key() -> str:
-    """Read the key from Streamlit Secrets or an environment variable."""
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
-    try:
-        return str(st.secrets["GEMINI_API_KEY"]).strip()
-    except Exception:
-        return ""
+def _get_mode_prompt(mode: str) -> str:
+    return MODE_PROMPTS.get(
+        mode,
+        MODE_PROMPTS["character"]
+    )
 
 
-def _client():
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "Не найден API-ключ Gemini. Добавь GEMINI_API_KEY в .streamlit/secrets.toml "
-            "или в Secrets настроек Streamlit Cloud."
-        )
-    return genai.Client(api_key=api_key)
-
-
-def _image_part(image_bytes: bytes, mime_type: str):
+def _check_image(image_bytes: bytes, mime_type: str) -> None:
     if not image_bytes:
-        raise ValueError("Изображение пустое. Загрузи файл ещё раз.")
-    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
-        raise ValueError("Поддерживаются PNG, JPG и WEBP.")
-    return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        raise ValueError("Изображение пустое.")
+
+    if mime_type not in {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    }:
+        raise ValueError("Формат изображения не поддерживается.")
+
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise ValueError("Изображение превышает лимит 10 МБ.")
 
 
-def analyze_art(image_bytes: bytes, mime_type: str, mode: str, user_goal: str = "") -> str:
-    """Analyze one uploaded artwork with the selected specialist prompt."""
-    if mode not in MODE_PROMPTS:
-        raise ValueError("Неизвестный режим ArtMentor.")
-    prompt = f"""
-{MODE_PROMPTS[mode]}
+def _send_to_ollama(messages: list, timeout: int = 300) -> str:
+    """Отправляет запрос локальной модели Ollama."""
 
-Сделай структурированный разбор изображения на русском языке.
-Учитывай, что это учебная помощь, а не оценка таланта автора.
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL_NAME,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": 0.5,
+                    "num_ctx": 8192,
+                },
+            },
+            timeout=timeout,
+        )
 
-Используй такую структуру:
+        response.raise_for_status()
+        result = response.json()
+
+        content = result.get("message", {}).get("content", "")
+
+        if not content.strip():
+            raise RuntimeError("Модель вернула пустой ответ.")
+
+        return content.strip()
+
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "Не удалось подключиться к Ollama. "
+            "Проверь, запущен ли Ollama на компьютере."
+        )
+
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            "Модель отвечает слишком долго. Попробуй ещё раз."
+        )
+
+    except requests.exceptions.HTTPError as error:
+        raise RuntimeError(
+            f"Ошибка Ollama: {error}"
+        )
+
+
+def analyze_art(
+    image_bytes: bytes,
+    mime_type: str,
+    mode: str,
+    user_goal: str = "",
+) -> str:
+    """Анализирует рисунок выбранным оператором."""
+
+    _check_image(image_bytes, mime_type)
+
+    encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    system_prompt = f"""
+Ты — ArtMentor, внимательный и профессиональный художественный наставник.
+Общайся на русском языке.
+
+{_get_mode_prompt(mode)}
+
+Твоя задача — дать содержательный анализ загруженной работы.
+
+Структура ответа:
+
 ## 1. Первое впечатление
-Кратко опиши, что видно на работе, и общее впечатление.
+Кратко опиши, что изображено и какое впечатление производит работа.
 
 ## 2. Что уже хорошо получается
-Назови 2–4 конкретные сильные стороны, опираясь на изображение.
+Назови 2–4 конкретные сильные стороны рисунка.
 
 ## 3. Что можно улучшить
-Назови до 4 наиболее важных пунктов. Для каждого объясни, что именно заметно
-и почему это может влиять на результат. Если явных проблем не видно, честно скажи это.
+Укажи до 4 наиболее важных моментов.
+Не придумывай ошибки, которых не видно на изображении.
 
 ## 4. Как исправить или усилить
-Дай пошаговые, практические рекомендации именно для этой работы.
+Предложи конкретные и понятные способы улучшения.
 
 ## 5. Небольшое упражнение
-Предложи одно короткое упражнение по главному навыку, который стоит потренировать.
+Предложи одно практическое упражнение по теме анализа.
 
 ## 6. Итог
-Подведи итог в 2–3 предложениях.
+Кратко подведи итог и поддержи автора.
 
-Не выставляй числовую оценку и не сравнивай автора с другими художниками.
-Если деталь изображения неразборчива, прямо обозначь неопределённость.
-Пожелание автора: {user_goal.strip() or "не указано"}.
+ВАЖНЫЕ ПРАВИЛА:
+- Не ставь числовые оценки.
+- Не сравнивай автора с другими художниками.
+- Не выдумывай детали изображения.
+- Если что-то невозможно рассмотреть, честно скажи об этом.
+- Учитывай художественный стиль и возможную задумку автора.
+- Не перегружай ответ профессиональными терминами без объяснения.
 """
-    response = _client().models.generate_content(
-        model=MODEL_NAME,
-        contents=[prompt, _image_part(image_bytes, mime_type)],
-    )
-    result = (response.text or "").strip()
-    if not result:
-        raise RuntimeError("ИИ не вернул текстовый ответ. Попробуй ещё раз.")
-    return result
+
+    if user_goal.strip():
+        user_text = (
+            "Дополнительная информация о задумке автора: "
+            + user_goal.strip()
+            + "\n\nПроанализируй изображение."
+        )
+    else:
+        user_text = "Проанализируй загруженную работу."
+
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        },
+        {
+            "role": "user",
+            "content": user_text,
+            "images": [encoded_image],
+        },
+    ]
+
+    return _send_to_ollama(messages)
 
 
 def answer_followup(
@@ -121,47 +214,71 @@ def answer_followup(
     conversation: list,
     question: str,
 ) -> str:
-    """Answer a follow-up while keeping the same artwork and prior dialogue in context."""
-    if mode not in MODE_PROMPTS:
-        raise ValueError("Неизвестный режим ArtMentor.")
-    if not question.strip():
+    """Отвечает на дополнительные вопросы по рисунку."""
+
+    _check_image(image_bytes, mime_type)
+
+    if not question or not question.strip():
         raise ValueError("Напиши вопрос перед отправкой.")
 
-    transcript = []
-    for item in conversation[-12:]:
-        role = "Пользователь" if item.get("role") == "user" else "ArtMentor"
-        transcript.append(f"{role}: {item.get('text', '')}")
-    transcript_text = "\n".join(transcript) or "Дополнительных сообщений пока нет."
+    encoded_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    prompt = f"""
-{MODE_PROMPTS[mode]}
+    system_prompt = f"""
+Ты — ArtMentor, художественный наставник.
+Общайся на русском языке.
 
-Ты продолжаешь разбирать ТОТ ЖЕ рисунок. Ниже исходный анализ и история диалога.
-Отвечай на русском, понятно и по делу. Не повторяй весь анализ без необходимости.
-Если вопрос выходит за рамки видимого изображения, объясни ограничение.
+Специализация текущего оператора:
+{_get_mode_prompt(mode)}
 
-ИСХОДНЫЙ АНАЛИЗ:
+Первоначальный анализ рисунка:
 {analysis}
 
-ИСТОРИЯ ДИАЛОГА:
-{transcript_text}
+Отвечай на вопросы пользователя, учитывая:
+- исходное изображение;
+- первоначальный анализ;
+- предыдущие сообщения диалога;
+- выбранную специализацию оператора.
 
-НОВЫЙ ВОПРОС ПОЛЬЗОВАТЕЛЯ:
-{question}
+Правила:
+- Отвечай конкретно и понятно.
+- Не повторяй весь первоначальный анализ без необходимости.
+- Если пользователь просит объяснить, объясняй пошагово.
+- Не выдумывай детали, которых не видно на изображении.
+- Если информации недостаточно, честно сообщи об этом.
+- Не противоречь первоначальному анализу без объяснения причины.
 """
-    response = _client().models.generate_content(
-        model=MODEL_NAME,
-        contents=[prompt, _image_part(image_bytes, mime_type)],
-    )
-    result = (response.text or "").strip()
-    if not result:
-        raise RuntimeError("ИИ не вернул ответ. Попробуй задать вопрос ещё раз.")
-    return result
+
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
+    ]
+
+    # Передаём последние сообщения диалога.
+    for message in conversation[-12:]:
+        if not isinstance(message, dict):
+            continue
+
+        role = message.get("role")
+        content = message.get("content", "")
+
+        if role in {"user", "assistant"} and content:
+            messages.append({
+                "role": role,
+                "content": str(content),
+            })
+
+    # Изображение прикладывается к новому вопросу.
+    messages.append({
+        "role": "user",
+        "content": question.strip(),
+        "images": [encoded_image],
+    })
+
+    return _send_to_ollama(messages)
 
 
-# Совместимость с учебным шаблоном, если где-то ещё вызывается эта функция.
-def main_ai_function(user_input):
-    return (
-        "ArtMentor AI подключается через analyze_art(image_bytes, mime_type, mode). "
-        "Выбери направление и загрузи изображение в интерфейсе."
-    )
+def main_ai_function(*args, **kwargs):
+    """Совместимость со старым интерфейсом проекта."""
+    return analyze_art(*args, **kwargs)
