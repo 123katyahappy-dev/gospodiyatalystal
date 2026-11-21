@@ -128,7 +128,7 @@ show_header()
 if st.session_state.page == "home":
     st.markdown("""
     <div class="intro">
-      <h3 style="margin:0 0 .45rem 0;color:#f0eaff;">Твоёdata_functions.pyrequirements.txtrequirements.txt творчество — наш общий проект ✨</h3>
+      <h3 style="margin:0 0 .45rem 0;color:#f0eaff;">Твоё творчество — наш общий проект ✨</h3>
       <p style="margin:0;color:#bcb5d2;line-height:1.6;">
       Выбери направление анализа, загрузи рисунок и получи понятную обратную связь:
       что уже получилось, что можно улучшить и как это сделать.
