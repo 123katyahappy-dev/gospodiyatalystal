@@ -261,7 +261,7 @@ def answer_followup(
             continue
 
         role = message.get("role")
-        content = message.get("content", "")
+        content = message.get("content") or message.get("text", "")
 
         if role in {"user", "assistant"} and content:
             messages.append({
