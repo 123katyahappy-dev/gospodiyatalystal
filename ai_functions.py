@@ -248,11 +248,8 @@ def answer_followup(
 - Не противоречь первоначальному анализу без объяснения причины.
 """
 
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt,
-        }
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": system_prompt}
     ]
 
     # Передаём последние сообщения диалога.
@@ -269,11 +266,10 @@ def answer_followup(
                 "content": str(content),
             })
 
-    # Изображение прикладывается к новому вопросу.
     messages.append({
         "role": "user",
         "content": question.strip(),
-        "images": [encoded_image],
+        "images": [encoded_image]
     })
 
     return _send_to_ollama(messages)
